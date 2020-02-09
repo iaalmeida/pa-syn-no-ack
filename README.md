@@ -1,2 +1,2 @@
 # pa-syn-no-ack
-Find SYN packets without ACK in a PCAP file
+Find SYN packets without SYN-ACK in a PCAP file
