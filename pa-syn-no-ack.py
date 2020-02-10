@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: latin-1 -*-
 '''
-Find SYN packets without ACK in a PCAP file
+Find SYN packets without SYN-ACK in a PCAP file
 Usage examples:
-    --file__ -i 100 -n 1000 -f 'tcp and not tcp.analysis.out_of_order' /c/TEMP/capture.cap
+    __file__ -i 100 -n 10000 -f 'tcp and not tcp.analysis.out_of_order' /c/TEMP/capture.pcap
 '''
 
 import os, sys
@@ -14,78 +14,32 @@ import progressbar
 
 # Versioning
 __author__ = 'Ivo Almeida'
-__version__ = '1.0a'
+__version__ = '1.1a'
 __maintainer__ = 'Ivo Almeida'
 __email__ = 'ivoalm@gmail.pt'
 
 # Global definitions
-SYN = '0x00000002'
-SYNACK = '0x00000012'
+TCP = '6'
+SYN = 0x00000002
+SYNACK = 0x00000012
 flags = {SYN: 'SYN', SYNACK: 'SYN-ACK'}
 flows = { }
-stats = dict.fromkeys(['packets', 'syns', 'syn-acks', 'errors'], 0)
+stats = dict.fromkeys(['packets', 'syns', 'syn-acks', 'other', 'errors'], 0)
 unknowns = [ ]
 
 
 # Parsing options
 parser = argparse.ArgumentParser(description='Find strange SYN / SYN-ACKs flows in a PCAP file')
-parser.add_argument('-V', '--version', action='store_true', help='show version')
+parser.add_argument('-V', '--version', action='version', version="%(prog)s "+__version__)
 parser.add_argument('-f', '--filter', default='tcp', help='tshark display filter')
 parser.add_argument('-i', '--initial', type=int, help='first packet number to analyse')
 parser.add_argument('-n', '--number', type=int, help='number of events to process')
-parser.add_argument('file', help='tcpdump file to analyse')
+parser.add_argument('file', default='capture.cap', help='tcpdump file to analyse')
 args = parser.parse_args()
 
-if args.version:
-    print(f'{sys.argv[0]} version {__version__}', file=sys.stderr)
-    exit(0)
-
-
-def print_stats():
-    ''' prints the stats for this session '''
-    global flows
-
-    print_flows()
-    print_unknown_flows()
-    print('----------' * 10 + "\nSession statistics:")
-    print(f"  {args.initial if args.initial else 1}\tfirst packet analysed")
-    print(f"  {stats['packets']}\ttotal packets analysed")
-    print(f"  {len(unknowns)}\ttotal unknown flows")
-    print(f"  {stats['syns']}\ttotal SYN packets received")
-    print(f"  {stats['syn-acks']}\ttotal SYN-ACK packets received")
-    print(f"  {stats['errors']}\ttotal error flows")
-    
-#--- 
-
-
-def print_flows():
-    ''' print problematic flows '''
-    global flows
-
-    print('----------' * 10 + "\nStrange Flows:")
-    for key in flows.keys():
-        packets = flows[key]
-        if len(packets) > 2 or len(packets) == 2 and packets[0].tcp.flags == packets[1].tcp.flags:  #case to be analysed
-            stats['errors'] += 1
-            p0 = packets[0]  #initial packet
-            print(f'  {p0.ip.src}:{p0.tcp.srcport} \t{p0.ip.dst}:{p0.tcp.dstport} \t({len(packets)} packets)')
-            for pkt in packets:
-                print(f'\t{pkt.frame_info.number}: \t{pkt.ip.src} \t{pkt.ip.dst} \t{flags[pkt.tcp.flags]}')
-    pass  #for debugging help
-
-#---
-
-
-def print_unknown_flows():
-    ''' print the unknown flows '''
-    global unknowns
-
-    if len(unknowns):
-        print('----------' * 10 + "\nUnknown Flows:")
-    for flow in unknowns:
-        print('  ' + flow)
-
-#print_unknown_flows()
+#if args.version:
+#    print(f'{sys.argv[0]} version {__version__}', file=sys.stderr)
+#    exit(0)
 
 
 def syn_sent(pkt):
@@ -95,7 +49,6 @@ def syn_sent(pkt):
     global flows
 
     #packet from client to server 
-    stats['syns'] += 1
     key = '/'.join([ pkt.ip.src, pkt.ip.dst, pkt.tcp.srcport ])
     if not flows.get(key):
         flows[key] = []
@@ -109,14 +62,65 @@ def syn_ack_received(pkt):
     global flows, unknowns
 
     #packet from server to client
-    stats['syn-acks'] += 1
     key = '/'.join([ pkt.ip.dst, pkt.ip.src, pkt.tcp.dstport ])
     if flows.get(key):
         flows[key].append(pkt)
     else:
-        unknowns.append(f'#{pkt.frame_info.number}: {pkt.ip.src}:{pkt.tcp.srcport} -> {pkt.ip.dst}:{pkt.tcp.dstport}')
+        unknowns.append(pkt)
 
 #syn_ack_received()
+
+
+def print_stats(num):
+    ''' prints the stats for this session '''
+    global flows
+
+    print_flows()
+    print_unknown_flows()
+    print('----------' * 10 + "\nSession statistics:")
+    if args.filter:
+        print(f"  \tfilter used: '{args.filter}'")
+    print(f"{args.initial if args.initial else 1:7}\tis the first packet analysed")
+    print(f"{num:7}\tpackets read")
+    print(f"{stats['packets']:7}\ttotal packets analysed")
+    print(f"{len(flows):7}\tconversations found")
+    print(f"{len(unknowns):7}\tunknown packets")
+    print(f"{stats['syns']:7}\tSYN packets received")
+    print(f"{stats['syn-acks']:7}\tSYN-ACK packets received")
+    print(f"{stats['other']:7}\tother type of packets received")
+    print(f"{stats['errors']:7}\tflows with possible problems")
+    
+#print_stats()
+
+
+def print_flows():
+    ''' print problematic flows '''
+    global flows
+
+    print('----------' * 10 + "\nStrange Flows:")
+    for key in flows.keys():
+        packets = flows[key]
+        if len(packets) > 2 or len(packets) == 2 and packets[0].tcp.flags == packets[1].tcp.flags:  #have to be analysed
+            stats['errors'] += 1
+            p0 = packets[0]  #initial packet
+            print(f'  {stats["errors"]:>4}. {p0.ip.src}:{p0.tcp.srcport} <-> {p0.ip.dst}:{p0.tcp.dstport} \t({len(packets)} packets)')
+            for pkt in packets:
+                print(f'\t{pkt.frame_info.number:>6}: {pkt.ip.src:>15}  {pkt.ip.dst:15}  {flags[int(pkt.tcp.flags, 16)]}')
+    pass  #for debugging help
+
+#print_flows()
+
+
+def print_unknown_flows():
+    ''' print the unknown flows '''
+    global unknowns
+
+    if len(unknowns):
+        print('----------' * 10 + "\nSYN-ACKs without SYNs:")
+    for pkt in unknowns:
+        print(f'\t{pkt.frame_info.number:>6}: {pkt.ip.src:>15}:{pkt.tcp.srcport}  {pkt.ip.dst}:{pkt.tcp.dstport}  {flags[int(pkt.tcp.flags, 16)]}')
+
+#print_unknown_flows()
 
 
 if __name__ == '__main__':
@@ -125,27 +129,30 @@ if __name__ == '__main__':
         print(f"'{args.file}' does not exist", file=sys.stderr)
         sys.exit(-1)
     capture = pyshark.FileCapture(args.file, display_filter=args.filter)
+    #capture.set_debug()
 
     bar = progressbar.ProgressBar(max_value = args.number if args.number else progressbar.UnknownLength)
     for num, pkt in enumerate(capture, start=1):
-        if args.initial and num < args.initial:
+        if args.initial and num < args.initial:  #jump first args.initial packets
             continue
-        if args.number and stats['packets'] == args.number:
+        if args.number and stats['packets'] == args.number:  #max number of packets defined
             capture.close()  #tshark needs to close the input file
             break
-        if (pkt.tcp.flags != SYN and pkt.tcp.flags != SYNACK):  #not a SYN neither SYN-ACK
+        stats['packets'] += 1
+        if pkt.ip.proto != TCP:  #to assure it's a TCP packet
             continue
-        if pkt.tcp.flags == SYN:
+        if int(pkt.tcp.flags, 16) == SYN:  #SYN packet
+            stats['syns'] += 1
             syn_sent(pkt)
-        elif pkt.tcp.flags == SYNACK:
+        elif int(pkt.tcp.flags, 16) == SYNACK:  #SYN-ACK packet
+            stats['syn-acks'] += 1
             syn_ack_received(pkt)
         else:
-            #wtf?!
-            unknowns.append(f'#{pkt.frame_info.number}: {pkt.ip.src}:{pkt.tcp.srcport} -> {pkt.ip.dst}:{pkt.tcp.dstport}, this is a non interesting packet')
+            stats['other'] += 1
+            continue
         bar.update(stats['packets'])
-        stats['packets'] += 1
     #--- for pkt in capture:
-    print_stats()
+    print_stats(num-1)
 
 #--- main
 sys.exit(0)
